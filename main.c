@@ -13,33 +13,17 @@
 
 static volatile bool stop_requested = false;
 
-/* 每条输出后强制刷新 USB CDC，防止长列表被截断 */
 #define P(fmt, ...) do { printf(fmt, ##__VA_ARGS__); stdio_flush(); } while (0)
 
-/* ---------- 函数声明 ---------- */
 static bool check_stop(void);
-static bool wait_ms_check(uint32_t ms);
 static void pin_low(uint pin);
 static void pin_high(uint pin);
 static void pin_release(uint pin);
 
 /* ---------- 基础引脚操作 ---------- */
-static void pin_low(uint pin) {
-    gpio_put(pin, 0);
-    gpio_set_dir(pin, GPIO_OUT);
-}
-
-/* 推挽输出高电平（用于测试，确保万用表能测到 3.3V） */
-static void pin_high(uint pin) {
-    gpio_put(pin, 1);
-    gpio_set_dir(pin, GPIO_OUT);
-}
-
-/* 释放为高阻（依靠外部上拉） */
-static void pin_release(uint pin) {
-    gpio_set_dir(pin, GPIO_IN);
-    gpio_disable_pulls(pin);
-}
+static void pin_low(uint pin) { gpio_put(pin, 0); gpio_set_dir(pin, GPIO_OUT); }
+static void pin_high(uint pin) { gpio_put(pin, 1); gpio_set_dir(pin, GPIO_OUT); }
+static void pin_release(uint pin) { gpio_set_dir(pin, GPIO_IN); gpio_disable_pulls(pin); }
 
 static void init_pin(uint pin) {
     gpio_init(pin);
@@ -48,88 +32,7 @@ static void init_pin(uint pin) {
     gpio_disable_pulls(pin);
 }
 
-/* ==========================================
- *            NRST (GP4) 专项测试命令
- * ========================================== */
-
-/* 1. 静态控制：高、低、释放 */
-static void run_nrst_static(const char *state) {
-    if (strcmp(state, "high") == 0) {
-        pin_high(NRST_PIN);
-        P("NRST (GP4) forced HIGH (Push-Pull). Measure ~3.3V.\r\n");
-    } else if (strcmp(state, "low") == 0) {
-        pin_low(NRST_PIN);
-        P("NRST (GP4) forced LOW. Measure ~0V.\r\n");
-    } else if (strcmp(state, "release") == 0) {
-        pin_release(NRST_PIN);
-        P("NRST (GP4) released to High-Z.\r\n");
-        P("(If no external pull-up, multimeter may read 0V or float.)\r\n");
-    } else {
-        P("Usage: nrst high | low | release\r\n");
-    }
-}
-
-/* 2. 慢速闪烁：500ms 低，500ms 推挽高 */
-static void run_nrst_blink(unsigned cycles) {
-    if (cycles == 0 || cycles > 50) {
-        P("Usage: nrst-blink N (N=1..50)\r\n");
-        return;
-    }
-    P("\r\nBlinking NRST %u times (500ms each state)...\r\n", cycles);
-    
-    for (unsigned i = 0; i < cycles && !stop_requested; i++) {
-        pin_low(NRST_PIN);
-        P("[NRST] %u/%u LOW\r\n", i + 1, cycles);
-        sleep_ms(500);
-
-        pin_high(NRST_PIN); // 强制推挽高
-        P("[NRST] %u/%u HIGH\r\n", i + 1, cycles);
-        sleep_ms(500);
-    }
-    pin_release(NRST_PIN);
-    P("NRST blink finished.\r\n");
-}
-
-/* 3. 低频脉冲串：每次 100ms 低，900ms 高（万用表指针会明显跳动） */
-static void run_nrst_pulse(unsigned cycles) {
-    if (cycles == 0 || cycles > 50) {
-        P("Usage: nrst-pulse N (N=1..50)\r\n");
-        return;
-    }
-    P("\r\nPulsing NRST %u times (100ms LOW, 900ms HIGH)...\r\n", cycles);
-    
-    for (unsigned i = 0; i < cycles && !stop_requested; i++) {
-        pin_low(NRST_PIN);
-        sleep_ms(100);
-        pin_high(NRST_PIN);
-        sleep_ms(900);
-    }
-    pin_release(NRST_PIN);
-    P("NRST pulse finished.\r\n");
-}
-
-/* 4. 方波：50Hz 方波，方便逻辑分析仪抓取 */
-static void run_nrst_square(void) {
-    P("\r\nGenerating 50Hz square wave on NRST for 10 seconds...\r\n");
-    P("Logic analyzer: Trigger on CH1 (GP4) Falling Edge.\r\n");
-    
-    for (int i = 0; i < 500 && !stop_requested; i++) {
-        pin_low(NRST_PIN);
-        sleep_ms(10);
-        pin_high(NRST_PIN);
-        sleep_ms(10);
-        if (check_stop()) break;
-    }
-    pin_release(NRST_PIN);
-    P("NRST square wave finished.\r\n");
-}
-
-
-/* ==========================================
- *            SWIM (GP2) 测试命令
- * ========================================== */
-
-/* 发送一次标准的进入序列 */
+/* ---------- 核心：发送序列并等待同步帧 ---------- */
 static void send_swim_waveform(void) {
     pin_release(SWIM_PIN);
     pin_low(NRST_PIN);
@@ -141,47 +44,106 @@ static void send_swim_waveform(void) {
     busy_wait_us_32(5);
 
     for (unsigned i = 0; i < 4; i++) {
-        pin_low(SWIM_PIN);
-        busy_wait_us_32(500);
-        pin_release(SWIM_PIN);
-        busy_wait_us_32(500);
+        pin_low(SWIM_PIN); busy_wait_us_32(500);
+        pin_release(SWIM_PIN); busy_wait_us_32(500);
     }
-
     for (unsigned i = 0; i < 4; i++) {
-        pin_low(SWIM_PIN);
-        busy_wait_us_32(250);
-        pin_release(SWIM_PIN);
-        busy_wait_us_32(250);
+        pin_low(SWIM_PIN); busy_wait_us_32(250);
+        pin_release(SWIM_PIN); busy_wait_us_32(250);
     }
 
     pin_release(NRST_PIN);
     pin_release(SWIM_PIN);
 }
 
-/* 专为逻辑分析仪设计的循环发波形命令 */
-static void run_swim_loop(unsigned cycles) {
+/* 返回 true 表示收到同步，false 表示超时 */
+static bool wait_for_sync(uint32_t timeout_us, int64_t *low_width_us) {
+    // 发完之后，引脚必须是高阻态，准备接收 STM8 的拉低
+    pin_release(SWIM_PIN);
+    
+    absolute_time_t start = get_absolute_time();
+    absolute_time_t deadline = make_timeout_time_us(timeout_us);
+
+    // 1. 等待 SWIM 变低 (STM8 主动拉低)
+    while (!time_reached(deadline)) {
+        if (gpio_get(SWIM_PIN) == 0) {
+            absolute_time_t pull_low_time = get_absolute_time();
+            int64_t wait_time = absolute_time_diff_us(start, pull_low_time);
+            if (wait_time > 1000) {
+                 // 如果超过 1ms 才拉低，可能是噪声或后续问题，但先记录下来
+            }
+            
+            // 2. 测量拉低的持续时间 (期望约 16us)
+            absolute_time_t low_deadline = make_timeout_time_us(100); // 最多等 100us 变高
+            while (!time_reached(low_deadline)) {
+                if (gpio_get(SWIM_PIN) == 1) {
+                    *low_width_us = absolute_time_diff_us(pull_low_time, get_absolute_time());
+                    return true;
+                }
+            }
+            // 一直低电平没恢复
+            *low_width_us = 100; 
+            return false; 
+        }
+    }
+    return false;
+}
+
+/* 单次完整测试 */
+static bool do_single_sync_test(int index, int total, bool print_result) {
+    send_swim_waveform();
+    
+    int64_t width = 0;
+    // 等待 5ms (5000us)
+    bool got_sync = wait_for_sync(5000, &width);
+    
+    if (print_result) {
+        if (got_sync) {
+            P("[OK] #%d/%d Sync received! LOW width = %lld us\r\n", 
+              index, total, (long long)width);
+        } else {
+            P("[FAIL] #%d/%d No sync (timeout or stuck).\r\n", index, total);
+        }
+    }
+    return got_sync;
+}
+
+/* 循环测试命令 */
+static void run_sync_auto(unsigned cycles) {
     if (cycles == 0 || cycles > 50) {
-        P("Usage: loop N (N=1..50)\r\n");
+        P("Usage: sync-auto N (N=1..50)\r\n");
         return;
     }
 
-    P("\r\nSending SWIM waveform %u times (500ms apart)...\r\n", cycles);
-    P("LA Trigger: CH1(NRST) Falling Edge.\r\n");
-    P("Send 'stop' to abort.\r\n");
+    P("\r\nStarting auto sync test (%u cycles)...\r\n", cycles);
+    P("Waiting up to 5ms for target response after each entry.\r\n");
 
     stop_requested = false;
-    for (unsigned i = 0; i < cycles && !stop_requested; i++) {
-        send_swim_waveform();
-        if (i < cycles - 1) {
-            if (!wait_ms_check(500)) break;
+    unsigned success = 0;
+
+    for (unsigned i = 1; i <= cycles && !stop_requested; i++) {
+        if (do_single_sync_test(i, cycles, true)) success++;
+        
+        if (i < cycles && !stop_requested) {
+            sleep_ms(500); // 间隔 500ms，给芯片喘口气
         }
     }
-    pin_release(SWIM_PIN);
-    pin_release(NRST_PIN);
-    P("Loop finished.\r\n");
-}
 
-/* ---------- 底层等待与中断检测 ---------- */
+    P("\r\n=== RESULT ===\r\n");
+    P("Attempts: %u, Success: %u, Fail: %u\r\n", cycles, success, cycles - success);
+    
+    if (success > 0) {
+        P("SUCCESS! Target responded. Entry sequence is CORRECT.\r\n");
+        P("Electrical and timing requirements are met.\r\n");
+    } else {
+        P("FAILED: No sync detected.\r\n");
+        P("Checklist:\r\n");
+        P("1. Is the STM8 powered (3.3V)? Common GND connected?\r\n");
+        P("2. SWIM / NRST wires connected to correct pins?\r\n");
+        P("3. Try replacing 750R pull-up with 4.7k or 10k.\r\n");
+        P("4. Is NRST driven LOW by RP2040 during the entry? (Check with meter)\r\n");
+    }
+}
 
 static bool check_stop(void) {
     static char cmd[16];
@@ -205,20 +167,6 @@ static bool check_stop(void) {
     return stop_requested;
 }
 
-/* 粗粒度等待，期间可以检测 stop */
-static bool wait_ms_check(uint32_t ms) {
-    while (ms > 0 && !check_stop()) {
-        uint32_t step = (ms > 10) ? 10 : ms;
-        sleep_ms(step);
-        ms -= step;
-    }
-    return !stop_requested;
-}
-
-/* ==========================================
- *            命令行处理
- * ========================================== */
-
 static void process_command(char *cmd) {
     while (*cmd && isspace((unsigned char)*cmd)) cmd++;
     size_t len = strlen(cmd);
@@ -228,50 +176,30 @@ static void process_command(char *cmd) {
 
     if (strcmp(cmd, "help") == 0) {
         P("\r\n=== Commands ===\r\n");
-        P("--- NRST (GP4) Tests ---\r\n");
-        P("nrst high         - Force GP4 HIGH (~3.3V)\r\n");
-        P("nrst low          - Force GP4 LOW (~0V)\r\n");
-        P("nrst release      - GP4 High-Z\r\n");
-        P("nrst-blink N      - Blink GP4 N times (500ms LOW/HIGH)\r\n");
-        P("nrst-pulse N      - Pulse GP4 N times (100ms LOW, 900ms HIGH)\r\n");
-        P("nrst-square       - 50Hz square wave on GP4 for 10s\r\n");
-        P("\r\n--- SWIM (GP2) Tests ---\r\n");
-        P("loop N            - Send SWIM waveform N times (500ms apart)\r\n");
-        P("stop              - Stop current test\r\n");
-    } 
-    else if (strncmp(cmd, "nrst ", 5) == 0) {
-        run_nrst_static(cmd + 5);
+        P("sync-auto N   - Send entry N times and check for target sync\r\n");
+        P("sync-test     - Test just one single sync\r\n");
+        P("stop          - Stop current test\r\n");
     }
-    else if (strncmp(cmd, "nrst-blink ", 11) == 0) {
+    else if (strcmp(cmd, "sync-test") == 0) {
+        P("\r\nSingle sync test...\r\n");
+        do_single_sync_test(1, 1, true);
+    }
+    else if (strncmp(cmd, "sync-auto ", 10) == 0) {
         unsigned n = 0;
-        if (sscanf(cmd + 11, "%u", &n) == 1) run_nrst_blink(n);
-        else P("Usage: nrst-blink N\r\n");
-    }
-    else if (strncmp(cmd, "nrst-pulse ", 11) == 0) {
-        unsigned n = 0;
-        if (sscanf(cmd + 11, "%u", &n) == 1) run_nrst_pulse(n);
-        else P("Usage: nrst-pulse N\r\n");
-    }
-    else if (strcmp(cmd, "nrst-square") == 0) {
-        run_nrst_square();
-    }
-    else if (strncmp(cmd, "loop ", 5) == 0) {
-        unsigned n = 0;
-        if (sscanf(cmd + 5, "%u", &n) == 1) run_swim_loop(n);
-        else P("Usage: loop N\r\n");
+        if (sscanf(cmd + 10, "%u", &n) == 1) run_sync_auto(n);
+        else P("Usage: sync-auto N\r\n");
     }
     else if (strcmp(cmd, "stop") == 0 || strcmp(cmd, "q") == 0) {
         stop_requested = true;
         pin_release(SWIM_PIN);
         pin_release(NRST_PIN);
-        P("Stopped, pins released.\r\n");
+        P("Stopped.\r\n");
     }
     else {
         P("Unknown command: %s\r\n", cmd);
     }
 }
 
-/* 等待 USB 主机连接 */
 static void wait_for_usb(void) {
     absolute_time_t deadline = make_timeout_time_ms(3000);
     while (!stdio_usb_connected() && !time_reached(deadline)) {
@@ -290,8 +218,9 @@ int main(void) {
     pin_release(SWIM_PIN);
     pin_release(NRST_PIN);
 
-    P("\r\n=== RP2040 SWIM & NRST Test Tool ===\r\n");
-    P("Type 'help' for commands.\r\n> ");
+    P("\r\n=== RP2040 SWIM Auto-Sync Tester ===\r\n");
+    P("Target: STM8. Connect GP2=SWIM, GP4=NRST.\r\n");
+    P("Type 'sync-auto 10' to start.\r\n> ");
 
     char line[LINE_MAX];
     unsigned used = 0;
