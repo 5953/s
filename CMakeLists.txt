@@ -19,7 +19,9 @@ target_link_libraries(rp2040zero_swim_slow_test
     hardware_pwm
 )
 
+# USB CDC 输出
 pico_enable_stdio_usb(rp2040zero_swim_slow_test 1)
+# UART 备份输出（GP0 TX / GP1 RX）；不接 USB-TTL 也留着无害
 pico_enable_stdio_uart(rp2040zero_swim_slow_test 1)
 
 pico_add_extra_outputs(rp2040zero_swim_slow_test)
