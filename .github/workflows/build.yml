@@ -1,36 +1,33 @@
 name: Build RP2040 Firmware
 
-on:
-  push:
-    branches: [ main, master ]
-  pull_request:
-    branches: [ main, master ]
+on: [push, pull_request]
 
 jobs:
   build:
     runs-on: ubuntu-latest
-    
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
-      with:
-        submodules: 'recursive' # 如果你的项目自身有子模块，请保留
 
     - name: Install ARM Toolchain
       run: |
         sudo apt-get update
         sudo apt-get install -y cmake gcc-arm-none-eabi libnewlib-arm-none-eabi build-essential
 
-    - name: Clone Pico SDK
+    - name: Clone Pico SDK with submodules
       run: |
-        git clone https://github.com/raspberrypi/pico-sdk.git --depth 1
-        cd pico-sdk
-        git submodule update --init # 关键：初始化 SDK 的子模块（如 TinyUSB）
+        # 克隆 SDK 到工作区，--depth 1 加快速度
+        git clone https://github.com/raspberrypi/pico-sdk.git --depth 1 ${{ github.workspace }}/pico-sdk
+        # 关键一步：初始化 SDK 内部的子模块（如 TinyUSB）
+        cd ${{ github.workspace }}/pico-sdk
+        git submodule update --init
 
     - name: Configure CMake
       env:
         PICO_SDK_PATH: ${{ github.workspace }}/pico-sdk
       run: |
+        # 清理可能残留的构建缓存
+        rm -rf build
         mkdir build
         cd build
         cmake .. -DPICO_BOARD=pico -DCMAKE_BUILD_TYPE=Release
