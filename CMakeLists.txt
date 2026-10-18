@@ -16,9 +16,10 @@ target_link_libraries(rp2040zero_swim_slow_test
     pico_stdlib
     hardware_gpio
     hardware_clocks
+    hardware_pwm
 )
 
 pico_enable_stdio_usb(rp2040zero_swim_slow_test 1)
-pico_enable_stdio_uart(rp2040zero_swim_slow_test 0)
+pico_enable_stdio_uart(rp2040zero_swim_slow_test 1)
 
 pico_add_extra_outputs(rp2040zero_swim_slow_test)
