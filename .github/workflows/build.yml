@@ -1,46 +1,25 @@
-name: Build RP2040-Zero SWIM Test UF2
-
-on:
-  workflow_dispatch:
-  push:
-    branches: [ "main", "master" ]
-
+# .github/workflows/build.yml
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout project
-        uses: actions/checkout@v4
-
-      - name: Checkout Pico SDK
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
         with:
-          repository: raspberrypi/pico-sdk
-          ref: 2.1.1
-          path: pico-sdk
-          submodules: recursive
+          submodules: recursive # 如果你的项目将 pico-sdk 作为子模块
 
-      - name: Install build tools
+      # 如果项目没有将 pico-sdk 作为子模块，则显式克隆
+      - name: Install Pico SDK
         run: |
-          sudo apt-get update
-          sudo apt-get install -y cmake ninja-build gcc-arm-none-eabi libnewlib-arm-none-eabi build-essential
+          git clone https://github.com/raspberrypi/pico-sdk.git ~/pico-sdk
+          cd ~/pico-sdk && git submodule update --init
 
-      - name: Configure
-        env:
-          PICO_SDK_PATH: ${{ github.workspace }}/pico-sdk
-        run: cmake -S firmware -B build -G Ninja -DPICO_BOARD=pico
+      - name: Copy pico_sdk_import.cmake
+        run: cp ~/pico-sdk/external/pico_sdk_import.cmake firmware/
 
-      - name: Build UF2
-        env:
-          PICO_SDK_PATH: ${{ github.workspace }}/pico-sdk
-        run: cmake --build build --parallel
-
-      - name: Upload UF2 and ELF
-        uses: actions/upload-artifact@v4
-        with:
-          name: rp2040zero-swim-test-uf2
-          path: |
-            build/rp2040zero_swim_test.uf2
-            build/rp2040zero_swim_test.elf
-            build/rp2040zero_swim_test.bin
-          if-no-files-found: error
+      - name: Configure CMake
+        run: |
+          cmake -S firmware -B build -G Ninja \
+                -DPICO_BOARD=pico \
+                -DPICO_SDK_PATH=$HOME/pico-sdk # 指向刚克隆的 SDK
+      - name: Build
+        run: cmake --build build
