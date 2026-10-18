@@ -16,6 +16,13 @@ static volatile bool stop_requested = false;
 /* 每条输出后强制刷新 USB CDC，防止长列表被截断 */
 #define P(fmt, ...) do { printf(fmt, ##__VA_ARGS__); stdio_flush(); } while (0)
 
+/* ---------- 函数声明 ---------- */
+static bool check_stop(void);
+static bool wait_ms_check(uint32_t ms);
+static void pin_low(uint pin);
+static void pin_high(uint pin);
+static void pin_release(uint pin);
+
 /* ---------- 基础引脚操作 ---------- */
 static void pin_low(uint pin) {
     gpio_put(pin, 0);
@@ -39,28 +46,6 @@ static void init_pin(uint pin) {
     gpio_put(pin, 0);
     gpio_set_dir(pin, GPIO_IN);
     gpio_disable_pulls(pin);
-}
-
-static bool check_stop(void) {
-    static char cmd[16];
-    static unsigned used = 0;
-    int ch;
-    while ((ch = getchar_timeout_us(0)) != PICO_ERROR_TIMEOUT) {
-        if (ch == '\r' || ch == '\n') {
-            cmd[used] = '\0';
-            if (strcmp(cmd, "stop") == 0 || strcmp(cmd, "q") == 0) {
-                stop_requested = true;
-                used = 0;
-                return true;
-            }
-            used = 0;
-        } else if ((ch == 8 || ch == 127) && used > 0) {
-            used--;
-        } else if (ch >= 32 && ch <= 126 && used + 1 < sizeof(cmd)) {
-            cmd[used++] = (char)ch;
-        }
-    }
-    return stop_requested;
 }
 
 /* ==========================================
@@ -196,6 +181,39 @@ static void run_swim_loop(unsigned cycles) {
     P("Loop finished.\r\n");
 }
 
+/* ---------- 底层等待与中断检测 ---------- */
+
+static bool check_stop(void) {
+    static char cmd[16];
+    static unsigned used = 0;
+    int ch;
+    while ((ch = getchar_timeout_us(0)) != PICO_ERROR_TIMEOUT) {
+        if (ch == '\r' || ch == '\n') {
+            cmd[used] = '\0';
+            if (strcmp(cmd, "stop") == 0 || strcmp(cmd, "q") == 0) {
+                stop_requested = true;
+                used = 0;
+                return true;
+            }
+            used = 0;
+        } else if ((ch == 8 || ch == 127) && used > 0) {
+            used--;
+        } else if (ch >= 32 && ch <= 126 && used + 1 < sizeof(cmd)) {
+            cmd[used++] = (char)ch;
+        }
+    }
+    return stop_requested;
+}
+
+/* 粗粒度等待，期间可以检测 stop */
+static bool wait_ms_check(uint32_t ms) {
+    while (ms > 0 && !check_stop()) {
+        uint32_t step = (ms > 10) ? 10 : ms;
+        sleep_ms(step);
+        ms -= step;
+    }
+    return !stop_requested;
+}
 
 /* ==========================================
  *            命令行处理
@@ -251,16 +269,6 @@ static void process_command(char *cmd) {
     else {
         P("Unknown command: %s\r\n", cmd);
     }
-}
-
-/* 粗粒度等待，期间可以检测 stop */
-static bool wait_ms_check(uint32_t ms) {
-    while (ms > 0 && !check_stop()) {
-        uint32_t step = (ms > 10) ? 10 : ms;
-        sleep_ms(step);
-        ms -= step;
-    }
-    return !stop_requested;
 }
 
 /* 等待 USB 主机连接 */
